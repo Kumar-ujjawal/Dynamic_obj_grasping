@@ -1,0 +1,47 @@
+{
+    "trajectories": {
+        "path": "/home/vr-lab/kinova_arm/src/kinova_rl/cfg/j.csv",
+        "column_names": ["q1", "q2", "q3","q4", "q5", "q6","q7"],
+        "floating_base_path": "/home/vr-lab/kinova_arm/src/kinova_rl/cfg/m.csv",
+        "fb_column_names": ["Vx", "Vy", "Vz"]
+    }
+    ,
+    "command_paths": [
+        "/j2s7s300/joint_1_velocity_controller/command",
+        "/j2s7s300/joint_2_velocity_controller/command",
+        "/j2s7s300/joint_3_velocity_controller/command",
+        "/j2s7s300/joint_4_velocity_controller/command",
+        "/j2s7s300/joint_5_velocity_controller/command",
+        "/j2s7s300/joint_6_velocity_controller/command",
+        "/j2s7s300/joint_7_velocity_controller/command"
+    ],
+    "state_paths": [
+        "/j2s7s300/joint_1_velocity_controller/state",
+        "/j2s7s300/joint_2_velocity_controller/state",
+        "/j2s7s300/joint_3_velocity_controller/state",
+        "/j2s7s300/joint_4_velocity_controller/state",
+        "/j2s7s300/joint_5_velocity_controller/state",
+        "/j2s7s300/joint_6_velocity_controller/state",
+        "/j2s7s300/joint_7_velocity_controller/state"
+    ],
+    "client_paths": [
+        "/j2s7s300/joint_1_velocity_controller/pid",
+        "/j2s7s300/joint_2_velocity_controller/pid",
+        "/j2s7s300/joint_3_velocity_controller/pid",
+        "/j2s7s300/joint_4_velocity_controller/pid",
+        "/j2s7s300/joint_5_velocity_controller/pid",
+        "/j2s7s300/joint_6_velocity_controller/pid",
+        "/j2s7s300/joint_7_velocity_controller/pid"
+    ],
+    "pid_bounds": {
+        "p":[
+            0, 2000
+        ],
+        "i": [
+            0, 20
+        ], 
+        "d": [
+            0, 10
+        ]
+    }
+}

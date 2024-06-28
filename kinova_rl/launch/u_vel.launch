@@ -1,5 +1,4 @@
 <launch>
-
   <!-- these are the arguments you can pass this launch file, for example paused:=true -->  
   <arg name="kinova_robotType" default="j2s7s300"/>
   <arg name="kinova_robotName" default="$(arg kinova_robotType)"/>
@@ -12,16 +11,14 @@
   <arg name="is7dof" default="true"/>
   <arg name="rqt" default="false"/>
   <arg name="has2finger" default="false"/>
-  <arg name="description_name" default="robot_description"/> <!-- allows remapping of robot_description into a namespace -->
+  <arg name="description_name" default="robot_description"/>
 
-    <!-- Load joint controller configurations from YAML file to parameter server -->
-  <rosparam file="$(find kinova_control)/config/$(arg kinova_robotName)_control.yaml" command="load"/>
-
+  <!-- Load joint controller configurations from YAML file to parameter server -->
+  <rosparam file="$(find kinova_control)/config/j2s7s300_control.yaml" command="load"/>
 
   <!-- Load the URDF into the ROS Parameter Server -->
   <param name="robot_description"
     command="$(find xacro)/xacro --inorder '$(find kinova_description)/urdf/$(arg kinova_robotType)_standalone.xacro'" />
-
 
   <!-- We resume the logic in empty_world.launch, changing only the name of the world to be launched -->
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
@@ -33,10 +30,7 @@
     <arg name="headless" value="$(arg headless)"/>
   </include>
 
-  <!-- Load the URDF into the ROS Parameter Server -->
-  <param name="robot_description"
-    command="$(find xacro)/xacro --inorder '$(find kinova_description)/urdf/$(arg kinova_robotType)_standalone.xacro'" />
-
+  <!-- Spawn the robot -->
   <node name="urdf_spawner" pkg="gazebo_ros" type="spawn_model" respawn="false" output="screen"
     args="-urdf -model $(arg kinova_robotName) -param robot_description
         -J $(arg kinova_robotType)_joint_1 3.14
@@ -50,23 +44,32 @@
         -J $(arg kinova_robotType)_joint_finger_2 1.0
         -J $(arg kinova_robotType)_joint_finger_3 1.0" />
 
+  <!-- Start the controllers -->
   <node name="$(arg kinova_robotName)_joints_controller" pkg="controller_manager" type="spawner" respawn="false"
         output="screen" ns="$(arg kinova_robotName)" unless="$(arg has2finger)"
        args="joint_1_velocity_controller joint_2_velocity_controller  
                joint_3_velocity_controller joint_4_velocity_controller
-               joint_5_velocity_controller joint_6_velocity_controller joint_7_velocity_controller 
+               joint_5_velocity_controller joint_6_velocity_controller joint_7_velocity_controller
                finger_2_position_controller finger_1_position_controller 
                finger_3_position_controller finger_tip_1_position_controller
                finger_tip_2_position_controller finger_tip_3_position_controller
                joint_state_controller"/> 
-<!-- 
-  convert joint states to TF transforms for rviz, etc -->
+    
+
+  <!-- Node to set initial joint velocities to zero -->
+  <node name="set_initial_velocities" pkg="kinova_rl" type="setZero.py" output="screen"/>
+
+  <!-- convert joint states to TF transforms for rviz, etc -->
   <node name="$(arg kinova_robotName)_robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher"
         respawn="true" output="screen">
     <remap from="/joint_states" to="/$(arg kinova_robotName)/joint_states"/>
     <remap from="robot_description" to="$(arg description_name)"/>
   </node>
 
- 
+  <!-- Start the PID tuning node -->
+  <!-- <node name="jaco_pid_tuner" pkg="kinova_rl" type="pid_tuning.py" output="screen"/> -->
 
+  <!-- Launch rqt_reconfigure -->
+  <!-- <node name="rqt_reconfigure" pkg="rqt_reconfigure" type="rqt_reconfigure" output="screen" if="$(arg rqt)"/> -->
+ 
 </launch>

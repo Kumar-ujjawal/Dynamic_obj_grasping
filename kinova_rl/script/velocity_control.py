@@ -20,11 +20,11 @@ joint_names = [
 
 # Define the velocity commands (rad/s)
 velocity_commands = [
-    [0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # Joint velocities for Goal 1
-    [0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # Joint velocities for Goal 2
-    [0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # Joint velocities for Goal 3
-    [0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # Joint velocities for Goal 4
-    [0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0]   # Joint velocities for Goal 5
+    [3.5, -15.5, 6.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # Joint velocities for Goal 1
+    [1.0, -13.5, 0.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # Joint velocities for Goal 2
+    [0.0, 10.0, 3.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # Joint velocities for Goal 3
+    [0.0, 10.0, 0.0, 3.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # Joint velocities for Goal 4
+    [0.0, 10.0, 0.0, 0.0, 3.5, 0.0, 0.0, 0.0, 0.0, 0.0]   # Joint velocities for Goal 5
 ]
 
 def move_joints():
