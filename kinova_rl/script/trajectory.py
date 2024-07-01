@@ -4,6 +4,7 @@ from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryG
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from kinematics import Robot7DOF  # Assuming you have a kinematics module
 import numpy as np
+from sensor_msgs.msg import JointState
 
 class JointTrajectoryController:
     def __init__(self):
@@ -19,7 +20,7 @@ class JointTrajectoryController:
                             'j2s7s300_joint_4', 'j2s7s300_joint_5', 'j2s7s300_joint_6', 'j2s7s300_joint_7']
         self.trajectory = JointTrajectory()
         self.trajectory.joint_names = self.joint_names
-
+        self.joint_state = rospy.Subscriber('j2s7s300/joint_states',JointState,callback= self.joint_state_msg)
         self.points = []
 
         # Get joint limits
@@ -51,7 +52,15 @@ class JointTrajectoryController:
 
             if abs(point.velocities[i]) > self.joint_velocity_limits[i]:
                 point.velocities[i] = self.joint_velocity_limits[i] * (0.1 if point.velocities[i] > 0 else -0.1)
-
+    def joint_state_msg(self,data):
+        self.current_joint_positions = data.position
+    def get_current_pose(self):
+        if self.current_joint_positions is None:
+            return None
+        
+        robot = Robot7DOF()
+        end_effector_pose = robot.forward_kinematics(self.current_joint_positions)
+        return end_effector_pose 
     def execute_trajectory(self):
         self.trajectory.points = self.points
         goal = FollowJointTrajectoryGoal()

@@ -40,7 +40,7 @@ def publish_link_velocity(link_name, reference_frame):
     except rospy.ROSException as e:
         rospy.logerr(f"ROS Exception: {e}")
 
-link_name = 'j2s7s300_link_7'  # Assuming link 7 is the end effector
+link_name = 'box'  # Assuming link 7 is the end effector
 reference_frame = 'world'
 
 rate = rospy.Rate(10)  # 10 Hz, but adjust as needed
