@@ -40,13 +40,6 @@ class Robot7DOF:
             )
         return T
 
-    def get_joint_limits(self):
-        # Define your joint limits as before
-        joint_lower_limits = [-2*3.14, 47/180*3.14, -2*3.14, 30/180*3.14, -2*3.14, 65/180*3.14, -2*3.14]
-        joint_upper_limits = [2*3.14, 313/180*3.14, 2*3.14, 330/180*3.14, 2*3.14, 295/180*3.14, 2*3.14]
-        joint_velocity_limits = [36/180*3.14, 36/180*3.14, 36/180*3.14, 36/180*3.14, 48/180*3.14, 48/180*3.14, 48/180*3.14]
-        return joint_lower_limits, joint_upper_limits, joint_velocity_limits
-    
     def objective_function(self, joint_angles, target_position):
         current_position = self.forward_kinematics(joint_angles)[:3, 3]
         return np.linalg.norm(current_position - target_position)
@@ -55,16 +48,62 @@ class Robot7DOF:
         if initial_guess is None:
             initial_guess = np.zeros(7)
         
+        print("Initial guess:", initial_guess)
+        
+        # Ensure initial_guess is within bounds
+        initial_guess = np.clip(initial_guess, self.joint_lower_limits, self.joint_upper_limits)
+        
+        print("Clipped initial guess:", initial_guess)
+        
         result = least_squares(
             self.objective_function,
             initial_guess,
             args=(target_position,),
-            bounds=(-np.pi, np.pi)
+            bounds=(self.joint_lower_limits, self.joint_upper_limits)
         )
         
-        return result.x
+        if result.success:
+            return result.x
+        else:
+            print("Optimization failed:", result.message)
+            return None
 
+    def is_valid_solution(self, joint_angles, target_position, tolerance=1e-3):
+        current_position = self.forward_kinematics(joint_angles)[:3, 3]
+        error = np.linalg.norm(current_position - target_position)
+        return error < tolerance
 
-if __name__ =="__main__":
-    robot = Robot7DOF()
-    print(robot.inverse_kinematics((0.2,0.2,0.1),(0,0,0,0,0,0,0)))
+    def inverse_kinematics_multi_attempt(self, target_position, initial_guess, num_attempts=5):
+        for _ in range(num_attempts):
+            solution = self.inverse_kinematics(target_position, initial_guess)
+            if solution is not None and self.is_valid_solution(solution, target_position):
+                return solution
+            initial_guess = np.random.uniform(self.joint_lower_limits, self.joint_upper_limits)
+        return None
+
+    def apply_joint_limits(self, joint_angles):
+        return np.clip(joint_angles, self.joint_lower_limits, self.joint_upper_limits)
+
+    def apply_velocity_limits(self, joint_velocities):
+        return np.clip(joint_velocities, -np.array(self.joint_velocity_limits), np.array(self.joint_velocity_limits))
+
+    def calculate_jacobian(self, joint_angles):
+        epsilon = 1e-6
+        jacobian = np.zeros((6, 7))
+        
+        for i in range(7):
+            joint_angles_plus = joint_angles.copy()
+            joint_angles_plus[i] += epsilon
+            joint_angles_minus = joint_angles.copy()
+            joint_angles_minus[i] -= epsilon
+            
+            T_plus = self.forward_kinematics(joint_angles_plus)
+            T_minus = self.forward_kinematics(joint_angles_minus)
+            
+            position_diff = (T_plus[:3, 3] - T_minus[:3, 3]) / (2 * epsilon)
+            rotation_diff = (T_plus[:3, :3] - T_minus[:3, :3]) / (2 * epsilon)
+            
+            jacobian[:3, i] = position_diff
+            jacobian[3:, i] = np.array([rotation_diff[2, 1], rotation_diff[0, 2], rotation_diff[1, 0]])
+        
+        return jacobian

@@ -42,9 +42,9 @@
         -J $(arg kinova_robotType)_joint_1 3.14
         -J $(arg kinova_robotType)_joint_2 3.14
         -J $(arg kinova_robotType)_joint_3 1.5
-        -J $(arg kinova_robotType)_joint_4 2.0
+        -J $(arg kinova_robotType)_joint_4 3.14
         -J $(arg kinova_robotType)_joint_5 1.0
-        -J $(arg kinova_robotType)_joint_6 0.0
+        -J $(arg kinova_robotType)_joint_6 3.14
         -J $(arg kinova_robotType)_joint_7 0.0
         -J $(arg kinova_robotType)_joint_finger_1 1.0
         -J $(arg kinova_robotType)_joint_finger_2 1.0
@@ -53,7 +53,8 @@
   <node name="$(arg kinova_robotName)_joints_controller" pkg="controller_manager" type="spawner" respawn="false"
         output="screen" ns="$(arg kinova_robotName)" unless="$(arg has2finger)"
        args="effort_joint_trajectory_controller
-       effort_finger_trajectory_controller
+       effort_finger_trajectory_controller finger_tip_1_position_controller finger_tip_2_position_controller
+       finger_tip_3_position_controller
                joint_state_controller"/> 
 
 

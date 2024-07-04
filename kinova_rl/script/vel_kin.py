@@ -113,7 +113,7 @@ class KinovaController:
                 self.pub_joint_torques[self.joint_names[i]].publish(Float64(0.0))
 
         # Wait for movement to complete
-        rospy.sleep(5.0)  # Assuming 1 second time frame
+        rospy.sleep(1.0)  # Assuming 1 second time frame
 
     def execute_goals(self):
         # Define goal poses (x, y, z, roll, pitch, yaw)
