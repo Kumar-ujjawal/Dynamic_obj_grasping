@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 
 import rospy
 import random
@@ -7,6 +6,13 @@ from collections import defaultdict
 from std_msgs.msg import Float64
 from std_srvs.srv import Empty
 from sensor_msgs.msg import JointState
+from gazebo_msgs.msg import ModelState
+from gazebo_msgs.srv import SetModelState
+from urdf_parser_py.urdf import URDF
+from pykdl_utils.kdl_parser import kdl_tree_from_urdf_model
+import PyKDL as kdl
+from threading import Thread, Lock
+
 
 # Assuming Robot7DOF is defined elsewhere
 from kinematics import Robot7DOF  # Assuming this is your custom robot kinematics class
@@ -28,15 +34,28 @@ class KinovaEnvRL:
             pub = rospy.Publisher(f'/j2s7s300/joint_{i+1}_velocity_controller/command', Float64, queue_size=1)
             self.joint_vel_pubs.append(pub)
         
-        self.unpause = rospy.ServiceProxy("/gazebo/unpause_physics", Empty)
-        self.pause = rospy.ServiceProxy("/gazebo/pause_physics", Empty)
-        self.reset_proxy = rospy.ServiceProxy("/gazebo/reset_simulation", Empty)
+        self.pause_physics = rospy.ServiceProxy("/gazebo/pause_physics", Empty)
+        self.unpause_physics = rospy.ServiceProxy("/gazebo/unpause_physics", Empty)
+        self.reset_simulation = rospy.ServiceProxy("/gazebo/reset_simulation", Empty)
+        self.set_model_state = rospy.ServiceProxy("/gazebo/set_model_state", SetModelState)
 
         self.action_space = 7  # One action per joint
         self.state_space = 24  # 7 joint positions, 7 joint velocities, 7 joint torques, 3 goal position
         self.action_step = 0.1  # The step size for each action
 
         self.rate = rospy.Rate(10)
+        # URDF SETTING 
+        self.robot_urdf = URDF.from_parameter_server('/robot_description')
+        self.kdl_tree = kdl_tree_from_urdf_model(self.robot_urdf)
+        self.base_link = self.robot_urdf.get_root()
+        self.end_effector_link = 'j2s7s300_end_effector'  # Adjust this to your robot's end effector link name
+
+        # Create KDL chain
+        self.arm_chain = self.kdl_tree.getChain(self.base_link, self.end_effector_link)
+
+        # Get link names
+        self.link_names = [self.arm_chain.getSegment(i).getName() for i in range(self.arm_chain.getNrOfSegments())]
+
 
         self.initial_joint_positions = [0.0, 0.0, 2.9, 1.3, -2.07, 1.4, 0.0]
         self.joint_lower_limits, self.joint_upper_limits, self.joint_velocity_limits = self.robot.get_joint_limits()
@@ -51,26 +70,74 @@ class KinovaEnvRL:
         self.max_steps_without_progress = 10
         self.goal_position = None
         self.recent_rewards = []  # Store recent rewards for feedback
+        self.goal_achieved_count = 0  # Counter for goal achievement
         rospy.loginfo("KinovaEnvRL initialized")
+        
+        # thread
+        self.joint_states_lock = Lock()
+        self.joint_states_thread = Thread(target=self.joint_states_listener)
+        self.joint_states_thread.daemon = True
+        self.joint_states_thread.start()
 
     def joint_states_callback(self, data):
-        self.joint_positions = data.position[:7]
-        self.joint_velocities = data.velocity[:7]
-        self.joint_torques = data.effort[:7]
+        with self.joint_states_lock:
+            self.joint_positions = data.position[:7]
+            self.joint_velocities = data.velocity[:7]
+            self.joint_torques = data.effort[:7]
+
+    def joint_states_listener(self):
+        rospy.loginfo("Joint state listener thread started")
+        rospy.spin()
+
+    def _get_state(self):
+        with self.joint_states_lock:
+            return self.joint_positions, self.joint_velocities, self.joint_torques
+
 
     def reset(self):
         max_reset_attempts = 5
         for attempt in range(max_reset_attempts):
             try:
                 rospy.loginfo(f"Attempting to reset simulation (attempt {attempt + 1})")
-                rospy.wait_for_service("/gazebo/reset_simulation", timeout=5.0)
-                self.reset_proxy()
                 
-                # Wait for a short time and check if ROS time is progressing
-                start_time = rospy.Time.now()
-                rospy.sleep(0.5)
-                if rospy.Time.now() <= start_time:
-                    rospy.logerr("ROS time is not progressing after reset")
+                # Pause the simulation
+                rospy.wait_for_service("/gazebo/pause_physics", timeout=5.0)
+                self.pause_physics()
+                rospy.loginfo("Simulation paused")
+
+                # Reset the simulation
+                rospy.wait_for_service("/gazebo/reset_simulation", timeout=5.0)
+                self.reset_simulation()
+                rospy.loginfo("Simulation reset")
+
+                # Set the robot to its initial state
+                model_state = ModelState()
+                model_state.model_name = "j2s7s300"  
+                model_state.pose.position.x = 0
+                model_state.pose.position.y = 0
+                model_state.pose.position.z = 0
+                model_state.pose.orientation.x = 0
+                model_state.pose.orientation.y = 0
+                model_state.pose.orientation.z = 0
+                model_state.pose.orientation.w = 1
+                
+                rospy.wait_for_service("/gazebo/set_model_state", timeout=5.0)
+                self.set_model_state(model_state)
+                rospy.loginfo("Robot state reset")
+
+                # Unpause the simulation
+                rospy.wait_for_service("/gazebo/unpause_physics", timeout=5.0)
+                self.unpause_physics()
+                rospy.loginfo("Simulation unpaused")
+
+                # Wait for joint states to be updated
+                timeout = rospy.Duration(5.0)
+                start_wait = rospy.Time.now()
+                while len(self.joint_positions) < 7 and (rospy.Time.now() - start_wait) < timeout:
+                    rospy.sleep(0.1)
+                
+                if len(self.joint_positions) < 7:
+                    rospy.logerr("Joint states not updated after reset")
                     continue
                 
                 self.goal_position = np.random.uniform(low=-2, high=2, size=3)
@@ -127,6 +194,10 @@ class KinovaEnvRL:
         reward = self._compute_reward(current_distance, joint_velocities)
         done = self._is_done(current_distance)
 
+        if done:
+            self.goal_achieved_count += 1
+            rospy.loginfo(f"Goal achieved! Total goals achieved so far: {self.goal_achieved_count}")
+
         self.last_distance = current_distance
         self.recent_rewards.append(reward)  # Store reward for feedback
 
@@ -135,20 +206,22 @@ class KinovaEnvRL:
     def _take_random_action(self):
         return np.random.uniform(-np.array(self.joint_velocity_limits), np.array(self.joint_velocity_limits), size=self.action_space)
 
-    def _get_state(self):
-        state = np.concatenate([self.joint_positions, self.joint_velocities, self.joint_torques, self.goal_position])
-        rospy.logdebug(f"Current state: {state}")
-        return state
+    # def _get_state(self):
+    #     state = np.concatenate([self.joint_positions, self.joint_velocities, self.joint_torques, self.goal_position])
+    #     rospy.loginfo(f"Current state: {state}")
+    #     return state
 
     def _get_distance_to_goal(self):
         end_effector_pos = self.robot.forward_kinematics(self.joint_positions)[:3, 3]
         distance = np.linalg.norm(end_effector_pos - self.goal_position)
-        rospy.logdebug(f"Distance to goal: {distance}")
+        rospy.loginfo(f"Distance to goal: {distance}")
         return distance
 
     def _compute_reward(self, current_distance, action):
         distance_reward = -current_distance
         goal_reward = 100 if current_distance < 0.1 else 0
+
+        progress_reward = self.last_distance - current_distance
 
         # Calculate joint limit penalty
         joint_limit_penalty = sum(
@@ -168,20 +241,55 @@ class KinovaEnvRL:
         smoothness_reward = -np.sum(np.square(self.joint_velocities))
         rospy.logdebug(f"Smoothness reward: {smoothness_reward}")
 
+        # Calculate self-collision penalty
+        collision_penalty = self._check_self_collision()
+        rospy.logdebug(f"Collision penalty: {collision_penalty}")
+
         # Calculate total reward
         total_reward = (
             5 * distance_reward +
-            goal_reward +
-            -0.1 * joint_limit_penalty +
-            -0.3 * velocity_limit_penalty +
-            0.1 * smoothness_reward
+            2 * goal_reward +
+            50 * progress_reward
+            - 0.5 * joint_limit_penalty +
+            - 0.3 * velocity_limit_penalty +
+            0.1 * smoothness_reward +
+            - 10 * collision_penalty  # Heavy penalty for self-collision
         )
         rospy.logdebug(f"Total reward: {total_reward}")
 
         return total_reward
 
+    def _check_self_collision(self):
+        collision_threshold = 0.05  # Adjust this value based on your robot's size and desired sensitivity
+        collision_penalty = 0
+
+        # Create a KDL joint array from current joint positions
+        kdl_joint_array = kdl.JntArray(len(self.joint_positions))
+        for i, pos in enumerate(self.joint_positions):
+            kdl_joint_array[i] = pos
+
+        # Forward kinematics solver
+        fk_solver = kdl.ChainFkSolverPos_recursive(self.arm_chain)
+
+        # Check distances between all pairs of links
+        for i in range(len(self.link_names)):
+            for j in range(i + 2, len(self.link_names)):  # Start from i+2 to avoid checking adjacent links
+                frame_i = kdl.Frame()
+                frame_j = kdl.Frame()
+
+                fk_solver.JntToCart(kdl_joint_array, frame_i, i)
+                fk_solver.JntToCart(kdl_joint_array, frame_j, j)
+
+                distance = kdl.diff(frame_i.p, frame_j.p).Norm()
+
+                if distance < collision_threshold:
+                    collision_penalty += 1
+                    rospy.logdebug(f"Potential collision detected between {self.link_names[i]} and {self.link_names[j]}")
+
+        return collision_penalty
+
     def _is_done(self, current_distance):
-        done = current_distance < 0.1 or self.steps_without_progress >= self.max_steps_without_progress
+        done = current_distance < 0.5 or self.steps_without_progress >= self.max_steps_without_progress
         rospy.logdebug(f"Done: {done}")
         return done
 
@@ -209,7 +317,6 @@ class KinovaEnvRL:
     def close(self):
         rospy.loginfo("Closing KinovaEnvRL")
         # Add any cleanup code here if necessary
-
 class QLearningAgent:
     def __init__(self, action_space, state_space, learning_rate=0.1, discount_factor=0.95, epsilon=0.1):
         rospy.loginfo("Initializing QLearningAgent")
@@ -262,8 +369,8 @@ def train():
     rospy.loginfo("Starting training")
     env = KinovaEnvRL()
     agent = QLearningAgent(env.action_space, env.state_space)
-    episodes = 50
-    max_step = 100
+    episodes =  100
+    max_step = 500
 
     try:
         for episode in range(episodes):
@@ -320,6 +427,9 @@ def train():
         rospy.logerr(f"An error occurred in training: {str(e)}")
     finally:
         env.close()
+
+    # Print out the total number of goal achievements
+    rospy.loginfo(f"Total number of goal achievements: {env.goal_achieved_count}")
 
 if __name__ == '__main__':
     try:
