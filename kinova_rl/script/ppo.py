@@ -107,7 +107,7 @@ class Jaco2Env(gym.Env):
         # Progress towards goal
         
         progress = previous_distance - distance
-        progress_rate = progress/0.02
+        progress_rate = progress/0.002
         progress_reward = np.clip(progress_rate, -1, 1) * 10
         # if progress > 0:
         #     progress_reward = 3 * progress  # Reward for moving towards the goal
@@ -156,7 +156,10 @@ class Jaco2Env(gym.Env):
         )
 
         # Bonus for reaching the goal
-        if distance <0.8:
+        if distance < 1.25:
+            reward +=50
+
+        if distance <0.85:
             reward +=100
 
         if distance < 0.5:
@@ -206,7 +209,7 @@ class Jaco2Env(gym.Env):
             print("/gazebo/unpause_physics service call failed")            
         # time.sleep(TIME_DELTA)
         # TIME_DELTA =0
-        time.sleep(0.02)
+        time.sleep(0.002)
         rospy.wait_for_service("/gazebo/pause_physics")
         try:
             self.pause()
@@ -216,7 +219,7 @@ class Jaco2Env(gym.Env):
         #print("current state taken from topic:", self.states) # Update the goal position continuously
         current_state = self.get_current_state()
         end_effector_position = self.compute_position(current_state[:7])
-        self.episode_time +=0.02
+        self.episode_time +=0.002
         next_state = np.concatenate((current_state, end_effector_position,[self.episode_time]))
         distance_to_goal = np.linalg.norm(end_effector_position - self.goal_position)     
         reward = self.calculate_reward(distance_to_goal,current_state,action,self.last_action,self.last_distance,self.current_step, self.max_step)
@@ -240,6 +243,8 @@ class Jaco2Env(gym.Env):
         #self.update_goal_position()  # Publish initial goal position
         # Initialize goal position at a random position within the workspace
         self.goal_position = np.random.uniform(low=-3, high=3, size=3)
+        self.goal_position[2] = abs(self.goal_position[2])
+
         print("goal position :" , self.goal_position)
         rospy.wait_for_service("/gazebo/unpause_physics")
         try:
@@ -247,7 +252,7 @@ class Jaco2Env(gym.Env):
         except (rospy.ServiceException) as e:
             print("/gazebo/unpause_physics service call failed")   
         # time.sleep(TIME_DELTA)
-        time.sleep(0.02)
+        time.sleep(0.002)
         rospy.wait_for_service("/gazebo/pause_physics")
         try:
             self.pause()
@@ -264,30 +269,58 @@ class Jaco2Env(gym.Env):
 
 
 class ActorNetwork(nn.Module):
-    def __init__(self,n_actions, state_dim,fc1_dims = 256, fc2_dims = 128, chkpt_dir = 'tmp/ppo'):
+    def __init__(self,n_actions, state_dim,fc1_dims = 256, fc2_dims = 256, chkpt_dir = 'tmp/ppo'):
         super(ActorNetwork,self).__init__()
         self.fc1 = nn.Linear(state_dim, fc1_dims).to(torch.float32)
+        self.bn1 = nn.BatchNorm1d(fc1_dims)
+
         self.fc2 = nn.Linear(fc1_dims, fc2_dims).to(torch.float32)
+        self.bn2 = nn.BatchNorm1d(fc2_dims)
         self.mean = nn.Linear(fc2_dims, n_actions).to(torch.float32)
         self.log_std = nn.Parameter(torch.zeros(n_actions, dtype=torch.float32))
+        path = 'best_model_episode_400/actor.pth'
+        # pretrained_model = torch.load(path)
+        # self.load_state_dict(pretrained_model['fc1'])
+        # self.load_state_dict(pretrained_model['fc2'])
+        self.apply(self._init_weights)
+        self.disable_bn()
+        
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            nn.init.orthogonal_(module.weight, gain=np.sqrt(2))
+            module.bias.data.zero_()
 
 
-    def forward(self,x):
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
+    def forward(self,state):
+        x = torch.relu(self.bn1(self.fc1(state)))
+        x = torch.relu(self.bn2(self.fc2(x)))
         mean = self.mean(x)
         std = self.log_std.exp() #.expand_as(mean)
         return mean, std
+    
+    def disable_bn(self):
+        self.bn1.eval()
+        self.bn2.eval()    
 
 
 
 class CriticNetwork(nn.Module):
-    def __init__(self, state_dim,fc1_dims = 256, fc2_dims = 128, chkpt_dir = 'tmp/ppo'):
+    def __init__(self, state_dim,fc1_dims = 256, fc2_dims = 256, chkpt_dir = 'tmp/ppo'):
         super(CriticNetwork,self).__init__()
         self.fc1 = nn.Linear(state_dim, fc1_dims).to(torch.float32)
         self.fc2 = nn.Linear(fc1_dims, fc2_dims).to(torch.float32)
         self.value = nn.Linear(fc2_dims, 1).to(torch.float32)
+        path = 'best_model_episode_400/critic.pth'
+        # pretrained_model = torch.load(path)
+        # self.load_state_dict(pretrained_model['fc1'])
+        # self.load_state_dict(pretrained_model['fc2'])
+        self.apply(self._init_weights)
 
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            nn.init.orthogonal_(module.weight, gain=np.sqrt(2))
+            module.bias.data.zero_()
+        
     def forward(self,x):
         x = torch.relu(self.fc1(x))
         x = torch.relu(self.fc2(x))
@@ -297,29 +330,53 @@ class CriticNetwork(nn.Module):
 
 
 
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.distributions import Normal, MultivariateNormal
+import numpy as np
+import os
+
 class Agent:
-    def __init__ (self, state_dim, action_dim, lr = 3e-4, gamma = 0.99, eps_clip = 0.2,epsilon = 0.2,lmbda = 0.95, epoch = 30, batch_size = 32):
-        self.actor_network = ActorNetwork(action_dim,state_dim)
+    def __init__(self, state_dim, action_dim, lr=1e-4, gamma=0.99, eps_clip=0.2, 
+                 epsilon=0.2, lmbda=0.95, epochs=30, batch_size=32, 
+                 value_loss_coef=0.5, entropy_coef=0.01, 
+                 clip_range_start=0.2, clip_range_end=0.02, 
+                 max_grad_norm=1.0, patience=10):
+        self.actor_network = ActorNetwork(action_dim, state_dim)
         self.critic_network = CriticNetwork(state_dim)
-        self.actor_optimizer = optim.Adam(self.actor_network.parameters(),lr = lr)
-        self.critic_optimizer = optim.Adam(self.critic_network.parameters(),lr = lr)
+        self.actor_optimizer = optim.Adam(self.actor_network.parameters(), lr=lr)
+        self.critic_optimizer = optim.Adam(self.critic_network.parameters(), lr=lr)
+        self.actor_scheduler = optim.lr_scheduler.ExponentialLR(self.actor_optimizer, gamma=0.995)
+        self.critic_scheduler = optim.lr_scheduler.ExponentialLR(self.critic_optimizer, gamma=0.995)
+        
         self.gamma = gamma
         self.epsilon = epsilon
         self.lmbda = lmbda
-        self.epochs = epoch
+        self.epochs = epochs
         self.batch_size = batch_size
         self.eps_clip = eps_clip
+        self.value_loss_coef = value_loss_coef
+        self.entropy_coef = entropy_coef
+        self.clip_range_start = clip_range_start
+        self.clip_range_end = clip_range_end
+        self.clip_range = clip_range_start
+        self.max_grad_norm = max_grad_norm
+        
         self.MseLoss = nn.MSELoss()
-        #self.replay_buffer = ReplayBuffer(10000)
         self.actor_loss = 0
         self.critic_loss = 0
-        self.actor_scheduler = optim.lr_scheduler.StepLR(self.actor_optimizer, step_size=100, gamma=0.9)
-        self.critic_scheduler = optim.lr_scheduler.StepLR(self.critic_optimizer, step_size=100, gamma=0.9)
+        
+        # Early stopping
+        self.patience = patience
+        self.best_reward = -float('inf')
+        self.patience_counter = 0
+        
+        # Replay buffer (simplified, you might want to implement a more sophisticated version)
+        self.replay_buffer = []
+        self.buffer_size = 10000
 
-
-    # def learn(self):
-    #     for _ in range(self.n_epochs):
-    #         state_arr
     def save_models(self, path='models'):
         if not os.path.exists(path):
             os.makedirs(path)
@@ -332,49 +389,46 @@ class Agent:
         self.critic_network.load_state_dict(torch.load(os.path.join(path, 'critic.pth')))
         print(f"Models loaded from {path}")
 
-    def select_action(self,state):
-        #print("state :", state)
+    def select_action(self, state):
         with torch.no_grad():
-            state = torch.tensor(state,dtype=torch.float32).unsqueeze(0)
+            state = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
             mean, std = self.actor_network(state)
-        #print("mean : ", mean, " & state : ", std)
         mean = torch.nan_to_num(mean, nan=0.0)
         std = torch.nan_to_num(std, nan=1.0)
         cov_matrix = torch.diag(std**2) 
-        #print("covariance matrix :",cov_matrix)
-        dist = MultivariateNormal(mean,covariance_matrix=cov_matrix)
+        dist = MultivariateNormal(mean, covariance_matrix=cov_matrix)
         action = dist.sample()
-        action = 2*(torch.tanh(action))
-        action_log_prob = dist.log_prob(action)   #.sum(dim=1)
-        return action.detach().numpy()[0],action_log_prob.detach()
+        action = 2 * (torch.tanh(action))
+        action_log_prob = dist.log_prob(action)
+        return action.detach().numpy()[0], action_log_prob.detach()
     
     def compute_advantages(self, rewards, values, next_values, dones):
         advantages = []
         gae = 0
-        rewards = np.atleast_1d(rewards)
-        values = np.atleast_1d(values)
-        next_values = np.atleast_1d(next_values)
-        dones = np.atleast_1d(dones)
         for step in reversed(range(len(rewards))):
-            if step == len(rewards) - 1:
-                next_value = 0  # For the last step, there is no next state
-            else:
-                next_value = next_values[step]
-            delta = rewards[step] + self.gamma * next_value * (~dones[step]) - values[step]
-            gae = delta + self.gamma * self.lmbda * (~dones[step]) * gae
+            delta = rewards[step] + self.gamma * next_values[step] * (1 - dones[step]) - values[step]
+            gae = delta + self.gamma * self.lmbda * (1 - dones[step]) * gae
             advantages.insert(0, gae)
         return advantages
 
-    def learn(self, trajectories):
+    def update_clip_range(self, progress):
+        self.clip_range = self.clip_range_start + progress * (self.clip_range_end - self.clip_range_start)
 
+    def add_to_replay_buffer(self, experience):
+        self.replay_buffer.append(experience)
+        if len(self.replay_buffer) > self.buffer_size:
+            self.replay_buffer.pop(0)
+
+    def sample_from_replay_buffer(self, batch_size):
+        return random.sample(self.replay_buffer, min(batch_size, len(self.replay_buffer)))
+
+    def learn(self, trajectories):
         if not trajectories:
             print("Warning: Empty trajectories. Skipping learning step.")
             return
         
         states, actions, log_probs, rewards, next_states, dones = zip(*trajectories)
-        # print(states,actions,log_probs,rewards,next_states,dones)
-        # print(states.dtype())
-        #print(f"Learning step - Trajectories: {len(trajectories)}, States shape: {np.shape(states)}")
+        
         states = torch.tensor(states, dtype=torch.float32)
         actions = torch.tensor(actions, dtype=torch.float32)
         old_log_probs = torch.stack(log_probs)
@@ -382,17 +436,17 @@ class Agent:
         next_states = torch.tensor(next_states, dtype=torch.float32)
         dones = torch.tensor(dones, dtype=torch.bool)
         
-
         with torch.no_grad():
             values = self.critic_network(states).squeeze()
             next_values = self.critic_network(next_states).squeeze()
             advantages = self.compute_advantages(
-            rewards.cpu().numpy(), 
-            values.cpu().numpy(), 
-            next_values.cpu().numpy(), 
-            dones)
+                rewards.cpu().numpy(), 
+                values.cpu().numpy(), 
+                next_values.cpu().numpy(), 
+                dones.cpu().numpy()
+            )
             
-            advantages = torch.tensor(advantages,dtype=torch.float32)
+            advantages = torch.tensor(advantages, dtype=torch.float32)
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
             returns = advantages + values
@@ -407,43 +461,57 @@ class Agent:
                 batch_advantages = advantages[batch_indices]
 
                 mean, std = self.actor_network(batch_states)
-                #print("mean : ",mean)
                 dist = Normal(mean, std)
                 new_log_probs = dist.log_prob(batch_actions).sum(dim=-1)
-                # Clamp the log probability difference
+                
                 log_ratio = new_log_probs - batch_log_probs
                 log_ratio = torch.clamp(log_ratio, -20, 20)
                 
                 ratios = torch.exp(log_ratio)
 
                 surr1 = ratios * batch_advantages
-                surr2 = torch.clamp(ratios, 1.0 - self.epsilon, 1.0 + self.epsilon) * batch_advantages
+                surr2 = torch.clamp(ratios, 1.0 - self.clip_range, 1.0 + self.clip_range) * batch_advantages
+                
+                # Actor loss
                 policy_loss = -torch.min(surr1, surr2).mean()
-                #print("policy loss :",policy_loss)
+                
+                # Entropy bonus
+                entropy = dist.entropy().mean()
+                
+                # Critic loss
                 value_pred = self.critic_network(batch_states).squeeze()
-                value_loss = F.mse_loss(value_pred , batch_returns)
-                #print("value loss :",value_loss)
-                # self.actor_optimizer.zero_grad()
-                # policy_loss.backward(retain_graph=True)
-                # self.actor_optimizer.step()
+                value_loss = F.mse_loss(value_pred, batch_returns)
+                
+                # Total loss
+                total_loss = policy_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy
 
-                # self.critic_optimizer.zero_grad()
-                # value_loss.backward(retain_graph=True)
-                # self.critic_optimizer.step()
-
-                total_loss = policy_loss + 0.5 * value_loss
-                self.actor_optimizer.zero_grad()
+                # Update critic
                 self.critic_optimizer.zero_grad()
-                total_loss.backward()
-                # torch.nn.utils.clip_grad_norm_(self.actor_network.parameters(), 0.5)
-                # torch.nn.utils.clip_grad_norm_(self.critic_network.parameters(), 0.5)
-                torch.nn.utils.clip_grad_norm_(self.actor_network.parameters(), max_norm=0.5)
-                torch.nn.utils.clip_grad_norm_(self.critic_network.parameters(), max_norm=0.5)
-
-                self.actor_optimizer.step()
+                value_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.critic_network.parameters(), self.max_grad_norm)
                 self.critic_optimizer.step()
+
+                # Update actor
+                self.actor_optimizer.zero_grad()
+                policy_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.actor_network.parameters(), self.max_grad_norm)
+                self.actor_optimizer.step()
+
+        # Step the learning rate schedulers
+        self.actor_scheduler.step()
+        self.critic_scheduler.step()
+
         self.actor_loss = policy_loss.item()
         self.critic_loss = value_loss.item()
+
+    def check_early_stopping(self, current_reward):
+        if current_reward > self.best_reward:
+            self.best_reward = current_reward
+            self.patience_counter = 0
+        else:
+            self.patience_counter += 1
+        
+        return self.patience_counter >= self.patience
 
 def evaluate(agent, env, num_episodes=5):
     total_rewards = []

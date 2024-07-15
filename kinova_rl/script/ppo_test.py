@@ -31,7 +31,7 @@ def main():
 
     print("Creating agent...")
     agent = Agent(state_dim=env.observation_space.shape[0], action_dim=env.action_space.shape[0])
-    for i in range(6):
+    for i in range(3):
 
         print("Loading trained model...")
         agent.load_models(f'best_model_episode_{(i+1)*100}')
@@ -42,7 +42,7 @@ def main():
 
     # Define 5 target positions
         target_positions = [
-        np.array([1.0, 1.0, 1.0]),
+        np.array([2.0, 2.0, 2.0]),
         np.array([-1.0, 0.5, 0.5]),
         np.array([0.5, -0.5, 1.5]),
         np.array([-0.5, -1.0, 0.0]),
