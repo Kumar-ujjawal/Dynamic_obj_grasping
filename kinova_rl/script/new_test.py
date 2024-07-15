@@ -6,7 +6,7 @@ from ppo import Jaco2Env  # Make sure to import your environment
 from ppo import Agent, ActorNetwork, CriticNetwork  # Import your agent and network classes
 import time
 TIME_DELTA = 0
-def test_model(env, agent, target_position, max_steps=1000, distance_threshold=0.5):
+def test_model(env, agent, target_position, max_steps=1000, distance_threshold=0.9):
     observation = env.reset()
     success = False
     for step in range(max_steps):
@@ -18,7 +18,7 @@ def test_model(env, agent, target_position, max_steps=1000, distance_threshold=0
         
         if distance < distance_threshold:
             success = True
-            return success, step + 1
+            return True, step + 1
         
         if done:
             break
@@ -36,7 +36,7 @@ def main():
     for i in range(3):
 
         print("Loading trained model...")
-        agent.load_models(f'best_model_episode_{(i+1)*100}')
+        agent.load_models('mod_lvl1')
         print("Model loaded successfully!")
 
     # Wait for user input before starting the tests
