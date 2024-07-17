@@ -6,7 +6,7 @@ from ppo import Jaco2Env  # Make sure to import your environment
 from ppo import Agent, ActorNetwork, CriticNetwork  # Import your agent and network classes
 import time
 TIME_DELTA = 0
-def test_model(env, agent, target_position, max_steps=1000, distance_threshold=0.9):
+def test_model(env, agent, target_position, max_steps=1000, distance_threshold=2.2):
     observation = env.reset()
     success = False
     for step in range(max_steps):
@@ -18,10 +18,10 @@ def test_model(env, agent, target_position, max_steps=1000, distance_threshold=0
         
         if distance < distance_threshold:
             success = True
-            return True, step + 1
+            # return True, step + 1
         
         if done:
-            break
+            success=True#break
     
     return success, step + 1
 
